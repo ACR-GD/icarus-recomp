@@ -6,6 +6,10 @@
 #include <stdint.h>
 #include <setjmp.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(p, m) _mkdir(p)
+#endif
 
 #define MAXBITS 13
 typedef struct { const uint8_t *in; size_t left; int bitbuf, bitcnt; jmp_buf env;
