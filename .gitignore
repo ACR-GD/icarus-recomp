@@ -12,3 +12,5 @@ icarus
 *.ppm
 .DS_Store
 __pycache__/
+icarus.cfg
+screenshots/

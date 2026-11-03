@@ -193,11 +193,15 @@ static uint32_t s_GetAttachedSurface(void) {
     WR32(ARG(2), S_[s->back].obj);
     return DD_OK;
 }
+extern int stats_flips, video_vsync_paces, video_is_flip, ff_active;
+void cursor_frame_end(void);
 static uint32_t s_Flip(void) {
     struct surf *s = SF(THIS);
-    host_frame_pace();
+    stats_flips++;
+    if (!video_vsync_paces || ff_active) host_frame_pace();   // otherwise the vsync'd present paces
+    cursor_frame_end();
     if (s->back >= 0) { struct surf *b = &S_[s->back]; uint32_t t = s->pixels; s->pixels = b->pixels; b->pixels = t; }
-    present();
+    video_is_flip = 1; present(); video_is_flip = 0;
     return DD_OK;
 }
 static uint32_t s_GetSurfaceDesc(void) { put_desc(ARG(1), SF(THIS)); return DD_OK; }

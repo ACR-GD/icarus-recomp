@@ -70,6 +70,20 @@
   end-of-track notice was eaten and music never looped. Notifications are now delivered from the
   event pump.
 
+## Presentation and input (quality of life)
+* Sprites: RLE, 0 = skip N, 1-3/0xff = transparent pixel, 0xfe = next row, 0xfd = end, other
+  bytes = palette index. Data pointers u32[0x531f70], widths u16[0x526300], heights u16[0x52c290].
+  0x44a7a0(x, y, sprite, mode) draws one. The mouse cursor and dragged items are drawn with it at
+  exactly (mouse_x, mouse_y) = ([0x52a4c4], [0x52a4c8]). `runtime/qol.c` turns those into the OS
+  cursor at each Flip.
+* 0x43c9b0 is the game's per-frame "show": SetCursor(NULL), then Flip.
+* Dialogue typewriter state: shown 0x5c6768, tick 0x5c676c, active 0x5c6770, total 0x5c6774. The
+  line ends when shown == total, so the speed hook never goes past total - 1.
+* Boot logos wait on time() (GetLocalTime/GetSystemTime). Logo skip advances the guest clock and
+  drops pacing until the first CD track (the title music).
+* Measured on a 75 Hz display: 60 fps host pacing showed 3 of every 4 frames for one refresh and
+  the fourth for two (judder). Vsync at the display rate gives a steady 75 fps.
+
 ## Debugging tips
 * `ICARUS_TRACE=1 ICARUS_TRACE_QUIET=PeekMessageA,GetLocalTime,GetSystemTime,SetEntries,SetPalette`
   gives a readable API log.

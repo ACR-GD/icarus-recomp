@@ -244,6 +244,8 @@ void rt_fn_enter(uint32_t a);
 #endif
 void rt_idle(void);
 int text_glyph_hook(void);
+int sprite_cursor_hook(void);
+void text_speed_hook(void);
 // Host -> guest calls (window procedure, timer callbacks): stdcall/cdecl, args pushed right-to-left.
 uint32_t guest_call(uint32_t fn, int nargs, const uint32_t *args);
 extern volatile int irq_pending;

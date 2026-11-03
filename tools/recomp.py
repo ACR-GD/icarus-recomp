@@ -232,6 +232,10 @@ def is_far_indirect(i):
 HOOKS = {
     # per-character text routine: replaced by runtime/text.c (anti-aliased proportional font)
     0x449f60: 'if (text_glyph_hook()) { RET(8); return; }',
+    # sprite blitter: sprites drawn at the mouse position become the host (hardware) cursor
+    0x44a7a0: 'if (sprite_cursor_hook()) { RET(0x10); return; }',
+    # dialogue typewriter: optional faster text (ICARUS_TEXT_SPEED)
+    0x44a0d0: 'text_speed_hook();',
 }
 # Idle points: heads of loops that only poll for time; the generated code yields there.
 IDLE = set()

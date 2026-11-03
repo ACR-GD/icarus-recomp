@@ -19,6 +19,7 @@ Nothing is emulated at run time: no Windows, no Wine, no CPU interpreter.
 | `runtime/w32_dsound.c` | DirectSound buffers mixed in software, plus the CD audio music tracks. |
 | `runtime/w32_mm.c` | Multimedia timers (delivered on the game thread), MCI `cdaudio`, the `mmio` RIFF reader. |
 | `runtime/w32_avi.c` | AVIFile stream reading and a Cinepak decoder for the game's own movie player. |
+| `runtime/qol.c` | Hardware cursor from the game's sprites, dialogue speed. |
 | `runtime/text.c` | Replacement text renderer: anti-aliased, proportional Crimson Pro glyphs blended through the game palette (`ICARUS_FONT=original` for the 1998 font). |
 | `tools/prepare_data.py`, `tools/is3unpack.c` | Rebuild the installed game from the original discs: ISO9660 extraction, the InstallShield 3 `.Z` archives (PKWARE DCL), and the CD audio tracks. |
 
@@ -45,7 +46,30 @@ and `data/cd/` (the run-time CD contents: maps, movies, music as WAV). Saved gam
 ## Controls
 
 The game's own controls: mouse for everything, Space or click to skip the intro movie, Esc to skip
-the prologue. Alt+Enter toggles fullscreen.
+the prologue. Added by this port:
+
+| Key | Action |
+|---|---|
+| Hold **Tab** | Fast-forward (4x) |
+| **F11** or **Alt+Enter** | Toggle fullscreen |
+| **F12** | Screenshot to `screenshots/` |
+| Click or any key during the boot logos | Skip straight to the title screen |
+
+## Quality of life
+
+* **Lag-free mouse:** the game's own cursor sprite is shown as the system cursor at the window's
+  scale, so it moves at full display rate instead of one frame behind (`HWCURSOR = 0` to disable).
+* **Display-synced frame rate:** like on 1998 hardware, where Flip waited for the monitor, the
+  game runs in step with the display: 60/75/85 Hz every refresh, 120/144 Hz every second one. No
+  judder from a 60 fps game on a 75 Hz screen. `FPS = 60` forces a rate.
+* **Sharp scaling:** crisp pixels of even size at any window size or in fullscreen (integer
+  upscale, then a smooth resize). `SCALE_MODE = nearest | smooth | integer`.
+* **Faster dialogue:** text types twice as fast (`TEXT_SPEED = 1` original, `0` instant).
+* **Readable font:** anti-aliased Crimson Pro instead of the 1998 bitmap font (`FONT = original`).
+* **Lower sound latency**, music that loops, and sound effects that load reliably.
+
+Settings live in `icarus.cfg` (created on first run, next to where you start the game). Every
+`KEY = value` there is the same as setting the environment variable `ICARUS_KEY`.
 
 ## Environment variables
 
@@ -62,7 +86,13 @@ the prologue. Alt+Enter toggles fullscreen.
 | `ICARUS_HEADLESS=1` | No window (testing). With `ICARUS_SHOT=file%04d.ppm` and `ICARUS_SHOT_EVERY=n` it saves frames. |
 | `ICARUS_FONT=original` | Use the game's original 8x16 bitmap font instead of the anti-aliased replacement. |
 | `ICARUS_AUDIO_DUMP=file.raw` | Also write the mixed audio (s16 stereo 44.1 kHz) to a file. |
-| `ICARUS_FPS=n` | Vertical-blank rate that Flip and on-screen palette changes are paced to (default 60). |
+| `ICARUS_FPS=n` | Fixed frame rate instead of following the display refresh. |
+| `ICARUS_SCALE_MODE=m` | `sharp` (default), `nearest`, `smooth` or `integer`. |
+| `ICARUS_TEXT_SPEED=n` | Dialogue speed: 1 original, 2 default, 0 instant. |
+| `ICARUS_HWCURSOR=0` | Draw the cursor in the game frame instead of as the system cursor. |
+| `ICARUS_VSYNC=0` | No vsync; host pacing at 60 fps. |
+| `ICARUS_STATS=1` | Print presents/flips per second and the worst frame gap. |
+| `ICARUS_CONFIG=file` | Settings file (default `icarus.cfg`). |
 | `ICARUS_KEYS=t:vk,...`, `ICARUS_CLICKS=t:x:y[:right],...` | Scripted input at t seconds (testing). |
 
 | `ICARUS_SNDTEST=slot:entry,...` | Testing: 20 s in, load and play DROYSND.SNF entries through the game's own loader. |

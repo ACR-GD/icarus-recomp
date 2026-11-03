@@ -409,9 +409,12 @@ static void put_systime(uint32_t p, struct tm *t, int ms) {
     WR16(p, t->tm_year + 1900); WR16(p + 2, t->tm_mon + 1); WR16(p + 4, t->tm_wday); WR16(p + 6, t->tm_mday);
     WR16(p + 8, t->tm_hour); WR16(p + 10, t->tm_min); WR16(p + 12, t->tm_sec); WR16(p + 14, ms);
 }
+int64_t w32_time_skew;   // seconds added to the guest clock (boot-logo skipping)
 static void now_tm(struct tm *t, int *ms, int local) {
     struct timespec ts; timespec_get(&ts, TIME_UTC);
-    time_t s = ts.tv_sec;
+    extern int logo_skip, title_reached;
+    if (logo_skip && !title_reached) w32_time_skew += 2;   // waits on time() end quickly while skipping
+    time_t s = ts.tv_sec + (time_t)w32_time_skew;
 #ifdef _WIN32
     if (local) localtime_s(t, &s); else gmtime_s(t, &s);
 #else

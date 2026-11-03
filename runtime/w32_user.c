@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 #include <time.h>
 #include <stdarg.h>
+#include <math.h>
+#include <sys/stat.h>
 
 uint32_t main_hwnd, main_wndproc;
 static uint32_t wnd_long[64];
@@ -18,9 +20,17 @@ static uint32_t t0_ms;
 
 void host_sleep_ms(uint32_t ms) { SDL_Delay(ms); }
 // Vertical-blank pacing for Flip(DDFLIP_WAIT): the original ran at the monitor refresh rate.
+extern int ff_active, logo_skip, title_reached;
 void host_frame_pace(void) {
     static uint64_t next; static uint64_t period;
     if (!period) { int fps = getenv("ICARUS_FPS") ? atoi(getenv("ICARUS_FPS")) : 60; period = fps > 0 ? 1000000000ull / (uint64_t)fps : 1; }
+    if (logo_skip && !title_reached) { next = 0; return; }
+    if (ff_active) {   // fast-forward: 4x the normal rate
+        static uint64_t fnext; uint64_t now = SDL_GetTicksNS(), p = period / 4;
+        if (fnext > now) SDL_DelayPrecise(fnext - now);
+        fnext = (fnext && SDL_GetTicksNS() - fnext < p) ? fnext + p : SDL_GetTicksNS() + p;
+        next = 0; return;
+    }
     uint64_t now = SDL_GetTicksNS();
     if (next > now) { SDL_DelayPrecise(next - now); now = next; }
     next = (next && now - next < period) ? next + period : now + period;
@@ -99,12 +109,16 @@ static void mouse_button(int right, int down) {
     keys[right ? 2 : 1] = down ? 0x80 : 0;
     post(main_hwnd, right ? (down ? 0x204 : 0x205) : (down ? 0x201 : 0x202), mk_mbuttons(), mk_mouse());
 }
+static int skip_logos(void);
+static void set_ff(int on);
 static void run_script(void) {
     double now = (SDL_GetTicks() - t0_ms) / 1000.0;
     for (int k = 0; k < nsev; k++) {
         struct sev *e = &sevs[k];
         if (e->done || now < e->t) continue;
         e->done = 1;
+        if (e->kind == 0 && e->a == 9) { set_ff(e->b); continue; }   // Tab: fast-forward
+        if ((e->kind == 0 && e->b) || e->kind == 1) { if (skip_logos()) continue; }
         if (e->kind == 0) key_event(e->a, e->b);
         else { mouse_x = e->a; mouse_y = e->b; post(main_hwnd, 0x200, mk_mbuttons(), mk_mouse()); mouse_button(e->c, e->kind == 1); }
     }
@@ -112,27 +126,64 @@ static void run_script(void) {
 
 static void pump_throttled(void);
 // ---------------------------------------------------------------- SDL video
+// Presentation: the guest frame is converted to XRGB, uploaded, and drawn letterboxed. Scaling:
+//   sharp (default): integer nearest-neighbour upscale into an intermediate texture, then a linear
+//                    resize to the window, so pixels stay crisp and evenly sized at any size;
+//   nearest / smooth / integer (whole multiples only, black borders) via ICARUS_SCALE_MODE.
+// VSync paces Flip when the display refresh is a multiple of 60 Hz; other presents (palette
+// changes, movie blits) are throttled to ~60/s so they never stall the game on the GPU.
 static int screenshot_every; static int frame_no; static const char *screenshot_path;
+enum { SC_SHARP, SC_NEAREST, SC_SMOOTH, SC_INTEGER };
+static int scale_mode = SC_SHARP;
+static SDL_Texture *mid; static int mid_w, mid_h;
+static SDL_FRect dst; static float out_scale = 1, density = 1;
+static int vsync_interval;          // 0 = host pacing only
+int video_vsync_paces;              // Flip pacing is done by vsync
+int video_is_flip;                  // set by DirectDraw around a Flip present
+int ff_active;                      // fast-forward (Tab held)
+int logo_skip;                      // a key/click during the boot logos
+int title_reached;                  // set when the title music starts
+static uint64_t last_gpu_ns; static int gpu_pending;
+static int cur_w = 640, cur_h = 480;
+
+SDL_Window *video_window(void) { return win; }
+float video_points_per_pixel(void) { return out_scale / density; }
+
 void video_init(void) {
     headless = getenv("ICARUS_HEADLESS") && atoi(getenv("ICARUS_HEADLESS"));
     if (getenv("ICARUS_SHOT")) { screenshot_path = getenv("ICARUS_SHOT"); screenshot_every = getenv("ICARUS_SHOT_EVERY") ? atoi(getenv("ICARUS_SHOT_EVERY")) : 60; }
     t0_ms = (uint32_t)SDL_GetTicks();
     parse_script();
     if (headless) return;
+    const char *m = getenv("ICARUS_SCALE_MODE");
+    if (getenv("ICARUS_SMOOTH")) scale_mode = SC_SMOOTH;
+    if (m) scale_mode = !strcmp(m, "nearest") ? SC_NEAREST : !strcmp(m, "smooth") ? SC_SMOOTH : !strcmp(m, "integer") ? SC_INTEGER : SC_SHARP;
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) rt_fatal("SDL video init: %s", SDL_GetError());
     int scale = getenv("ICARUS_SCALE") ? atoi(getenv("ICARUS_SCALE")) : 2;
     win = SDL_CreateWindow("Icarus: Sanctuary of the Gods", 640 * scale, 480 * scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!win) rt_fatal("SDL window: %s", SDL_GetError());
+    SDL_SetWindowMinimumSize(win, 640, 480);
     ren = SDL_CreateRenderer(win, 0);
-    SDL_SetRenderVSync(ren, 0);
-    SDL_SetRenderLogicalPresentation(ren, 640, 480, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    // Like on 1998 hardware (Flip waited for the monitor's vertical blank), the game runs at the
+    // display refresh: vsync with the interval that puts the frame rate closest to 60-75 fps
+    // (60/75/85 Hz -> every refresh, 120/144 Hz -> every second one, 240 Hz -> every fourth).
+    // Displays with no such interval fall back to host pacing at 60 fps. ICARUS_FPS forces a rate.
+    const SDL_DisplayMode *dm = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(win));
+    float hz = dm && dm->refresh_rate > 0 ? dm->refresh_rate : 60;
+    int k = (int)(hz / 67.0f + 0.5f); if (k < 1) k = 1;
+    float fps = hz / k;
+    if (!getenv("ICARUS_FPS") && !(getenv("ICARUS_VSYNC") && !atoi(getenv("ICARUS_VSYNC"))) && fps >= 55 && fps <= 90 && SDL_SetRenderVSync(ren, k)) {
+        vsync_interval = k; video_vsync_paces = 1;
+    } else SDL_SetRenderVSync(ren, 0);
+    LOG("display %.2f Hz, vsync interval %d\n", hz, vsync_interval);
     if (getenv("ICARUS_FULLSCREEN") && atoi(getenv("ICARUS_FULLSCREEN"))) SDL_SetWindowFullscreen(win, true);
 }
 void video_shutdown(void) {
+    if (mid) SDL_DestroyTexture(mid);
     if (tex) SDL_DestroyTexture(tex);
     if (ren) SDL_DestroyRenderer(ren);
     if (win) SDL_DestroyWindow(win);
-    tex = 0; ren = 0; win = 0;
+    mid = tex = 0; ren = 0; win = 0;
 }
 static uint32_t rgba_buf[1024 * 768];
 static void write_ppm(const char *path, int w, int h) {
@@ -145,8 +196,82 @@ static void write_ppm(const char *path, int w, int h) {
     fclose(f);
     rename(tmp, path);
 }
+// F12: save the current frame as a BMP in screenshots/
+static void save_screenshot(void) {
+    MKDIR("screenshots");
+    char name[128]; time_t t = time(0); struct tm tmv;
+#ifdef _WIN32
+    localtime_s(&tmv, &t);
+#else
+    localtime_r(&t, &tmv);
+#endif
+    strftime(name, sizeof name, "screenshots/icarus-%Y%m%d-%H%M%S.bmp", &tmv);
+    SDL_Surface *sf = SDL_CreateSurfaceFrom(cur_w, cur_h, SDL_PIXELFORMAT_XRGB8888, rgba_buf, cur_w * 4);
+    if (sf && SDL_SaveBMP(sf, name)) fprintf(stderr, "screenshot: %s\n", name);
+    SDL_DestroySurface(sf);
+}
+// ICARUS_STATS=1: once a second print presents/s, flips/s and the longest gap between presents
+int stats_flips;
+static void stats_tick(void) {
+    static int on = -1; static uint64_t t0, last; static int presents; static double worst;
+    if (on < 0) on = getenv("ICARUS_STATS") != 0;
+    if (!on) return;
+    uint64_t now = SDL_GetTicksNS();
+    if (last) { double gap = (now - last) / 1e6; if (gap > worst) worst = gap; }
+    last = now; presents++;
+    if (!t0) t0 = now;
+    if (now - t0 >= 1000000000ull) {
+        fprintf(stderr, "[stats] %3d presents/s %3d flips/s, worst gap %5.1f ms\n", presents, stats_flips, worst);
+        t0 = now; presents = 0; stats_flips = 0; worst = 0;
+    }
+}
+static void layout(int w, int h) {
+    int ow, oh; SDL_GetCurrentRenderOutputSize(ren, &ow, &oh);
+    float s = fminf((float)ow / w, (float)oh / h);
+    if (scale_mode == SC_INTEGER && s >= 1) s = floorf(s);
+    out_scale = s; density = SDL_GetWindowPixelDensity(win); if (density <= 0) density = 1;
+    dst.w = w * s; dst.h = h * s; dst.x = floorf((ow - dst.w) / 2); dst.y = floorf((oh - dst.h) / 2);
+}
+static void gpu_present(void) {
+    int w = cur_w, h = cur_h;
+    if (!tex || tex_w != w || tex_h != h) {
+        if (tex) SDL_DestroyTexture(tex);
+        tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+        SDL_SetTextureScaleMode(tex, scale_mode == SC_SMOOTH ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+        tex_w = w; tex_h = h;
+    }
+    layout(w, h);
+    SDL_UpdateTexture(tex, 0, rgba_buf, w * 4);
+    SDL_SetRenderTarget(ren, 0);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderClear(ren);
+    int k = (int)floorf(out_scale);
+    if (scale_mode == SC_SHARP && k >= 1 && out_scale - k > 0.01f) {
+        if (!mid || mid_w != w * k || mid_h != h * k) {
+            if (mid) SDL_DestroyTexture(mid);
+            mid = SDL_CreateTexture(ren, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_TARGET, w * k, h * k);
+            SDL_SetTextureScaleMode(mid, SDL_SCALEMODE_LINEAR);
+            mid_w = w * k; mid_h = h * k;
+        }
+        SDL_SetRenderTarget(ren, mid);
+        SDL_RenderTexture(ren, tex, 0, 0);
+        SDL_SetRenderTarget(ren, 0);
+        SDL_RenderTexture(ren, mid, 0, &dst);
+    } else SDL_RenderTexture(ren, tex, 0, &dst);
+    // ICARUS_DUMP_OUTPUT=file.bmp (testing): save the window contents once, ICARUS_DUMP_AT s in
+    static const char *dump = (const char *)1;
+    if (dump == (const char *)1) dump = getenv("ICARUS_DUMP_OUTPUT");
+    if (dump && SDL_GetTicks() - t0_ms > (uint64_t)(getenv("ICARUS_DUMP_AT") ? atoi(getenv("ICARUS_DUMP_AT")) : 10) * 1000) {
+        SDL_Surface *sf = SDL_RenderReadPixels(ren, 0);
+        if (sf) { SDL_SaveBMP(sf, dump); SDL_DestroySurface(sf); fprintf(stderr, "dumped output to %s\n", dump); }
+        dump = 0;
+    }
+    SDL_RenderPresent(ren);
+    last_gpu_ns = SDL_GetTicksNS(); gpu_pending = 0;
+}
 void video_present(uint32_t pixels, int pitch, int w, int h, int bpp, const uint32_t *pal) {
     if (w > 1024 || h > 768) return;
+    stats_tick();
     for (int y = 0; y < h; y++) {
         const uint8_t *row = GP(pixels + (uint32_t)(y * pitch));
         uint32_t *o = rgba_buf + y * w;
@@ -157,6 +282,7 @@ void video_present(uint32_t pixels, int pitch, int w, int h, int bpp, const uint
             o[x] = 0xff000000u | ((r << 3 | r >> 2) << 16) | ((g << 2 | g >> 4) << 8) | (b << 3 | b >> 2);
         } else for (int x = 0; x < w; x++) o[x] = 0xff000000u | (row[4 * x + 2] << 16) | (row[4 * x + 1] << 8) | row[4 * x];
     }
+    cur_w = w; cur_h = h;
     frame_no++;
     pump_throttled();
     if (screenshot_path && screenshot_every && frame_no % screenshot_every == 0) {
@@ -165,23 +291,38 @@ void video_present(uint32_t pixels, int pitch, int w, int h, int bpp, const uint
         write_ppm(p, w, h);
     }
     if (headless || !ren) return;
-    if (!tex || tex_w != w || tex_h != h) {
-        if (tex) SDL_DestroyTexture(tex);
-        tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
-        SDL_SetTextureScaleMode(tex, getenv("ICARUS_SMOOTH") ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
-        tex_w = w; tex_h = h;
-        SDL_SetRenderLogicalPresentation(ren, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    }
-    SDL_UpdateTexture(tex, 0, rgba_buf, w * 4);
-    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-    SDL_RenderClear(ren);
-    SDL_RenderTexture(ren, tex, 0, 0);
-    SDL_RenderPresent(ren);
+    uint64_t now = SDL_GetTicksNS();
+    // flips are frames: show each one (vsync paces them) unless fast-forwarding; anything else is
+    // shown at most ~60 times a second
+    if ((video_is_flip && !ff_active) || now - last_gpu_ns >= 15000000ull) gpu_present();
+    else gpu_pending = 1;
 }
 
 // ---------------------------------------------------------------- event pump
 static int quit_posted;
 void audio_poll(void);
+static void to_game(float wx, float wy) {   // window points -> game pixels
+    if (!ren) return;
+    float px = wx * density, py = wy * density;
+    int x = (int)((px - dst.x) / out_scale), y = (int)((py - dst.y) / out_scale);
+    mouse_x = x < 0 ? 0 : x >= cur_w ? cur_w - 1 : x;
+    mouse_y = y < 0 ? 0 : y >= cur_h ? cur_h - 1 : y;
+}
+static void set_ff(int on);
+void video_on_title(void) { if (title_reached) return; title_reached = 1; if (logo_skip) set_ff(0); }
+static void set_ff(int on) {
+    if (on == ff_active) return;
+    ff_active = on;
+    if (ren && vsync_interval) SDL_SetRenderVSync(ren, on ? 0 : vsync_interval);
+}
+// boot logos: a key or click jumps the clock the logos wait on and drops frame pacing until the
+// title screen (its music) starts; the input itself is not passed to the game
+static int skip_logos(void) {
+    if (title_reached) return 0;
+    extern int64_t w32_time_skew; w32_time_skew += 10;
+    logo_skip = 1; set_ff(1);
+    return 1;
+}
 void w32_pump_events(void) {
     run_script();
     audio_poll();      // CD track finished -> MM_MCINOTIFY
@@ -190,6 +331,7 @@ void w32_pump_events(void) {
         while (SDL_PollEvent(&e)) if (e.type == SDL_EVENT_QUIT) { w32_shutdown(); exit(0); }
         return;
     }
+    if (gpu_pending && SDL_GetTicksNS() - last_gpu_ns >= 15000000ull) gpu_present();
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
         case SDL_EVENT_QUIT:
@@ -198,23 +340,28 @@ void w32_pump_events(void) {
             break;
         case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP: {
             int down = e.type == SDL_EVENT_KEY_DOWN;
-            if (down && e.key.scancode == SDL_SCANCODE_RETURN && (e.key.mod & SDL_KMOD_ALT)) {
-                SDL_SetWindowFullscreen(win, !(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN)); break;
+            SDL_Scancode sc = e.key.scancode;
+            if (down && ((sc == SDL_SCANCODE_RETURN && (e.key.mod & SDL_KMOD_ALT)) || sc == SDL_SCANCODE_F11)) {
+                if (!e.key.repeat) SDL_SetWindowFullscreen(win, !(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN));
+                break;
             }
-            int vk = vk_of(e.key.scancode);
+            if (sc == SDL_SCANCODE_F12) { if (down && !e.key.repeat) save_screenshot(); break; }
+            if (sc == SDL_SCANCODE_TAB) { set_ff(down); break; }       // hold to fast-forward
+            if (down && !e.key.repeat && skip_logos()) break;
+            int vk = vk_of(sc);
             if (down && e.key.repeat) { post(main_hwnd, 0x100, vk, 0x40000001u); break; }
             key_event(vk, down);
             break;
         }
+        case SDL_EVENT_WINDOW_FOCUS_LOST: set_ff(0); break;
         case SDL_EVENT_MOUSE_MOTION: {
-            SDL_ConvertEventToRenderCoordinates(ren, &e);
-            mouse_x = (int)e.motion.x; mouse_y = (int)e.motion.y;
+            to_game(e.motion.x, e.motion.y);
             post(main_hwnd, 0x200, mk_mbuttons(), mk_mouse());
             break;
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: {
-            SDL_ConvertEventToRenderCoordinates(ren, &e);
-            mouse_x = (int)e.button.x; mouse_y = (int)e.button.y;
+            to_game(e.button.x, e.button.y);
+            if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && skip_logos()) break;
             if (e.button.button == SDL_BUTTON_LEFT || e.button.button == SDL_BUTTON_RIGHT)
                 mouse_button(e.button.button == SDL_BUTTON_RIGHT, e.type == SDL_EVENT_MOUSE_BUTTON_DOWN);
             break;
@@ -335,12 +482,13 @@ static uint32_t u_GetAsyncKeyState(void) {
 static uint32_t u_SetCursorPos(void) {
     mouse_x = (int)ARG(0); mouse_y = (int)ARG(1);
     if (win && (SDL_GetWindowFlags(win) & SDL_WINDOW_INPUT_FOCUS) && getenv("ICARUS_WARP")) {
-        float wx, wy; SDL_RenderCoordinatesToWindow(ren, (float)mouse_x, (float)mouse_y, &wx, &wy);
-        SDL_WarpMouseInWindow(win, wx, wy);
+        SDL_WarpMouseInWindow(win, (dst.x + (mouse_x + 0.5f) * out_scale) / density, (dst.y + (mouse_y + 0.5f) * out_scale) / density);
     }
     return 1;
 }
+int hwcursor_active(void);
 static uint32_t u_SetCursor(void) {
+    if (hwcursor_active()) return 0;     // the host cursor follows the game's cursor sprite instead
     int vis = ARG(0) != 0;
     if (vis != cursor_visible && !headless) { if (vis) SDL_ShowCursor(); else SDL_HideCursor(); }
     cursor_visible = vis;

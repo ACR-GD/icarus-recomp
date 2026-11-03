@@ -40,7 +40,9 @@ static int open_track(int t) {
     cd_track = t;
     return 1;
 }
+void video_on_title(void);
 void cdda_play(int from, int to) {
+    video_on_title();   // the first music is the title screen: boot logos are over
     if (stream) SDL_LockAudioStream(stream);
     cd_from = from; cd_to = to < from ? from : to;
     cd_playing_flag = open_track(from);
@@ -122,6 +124,7 @@ static void SDLCALL mix_cb(void *ud, SDL_AudioStream *st, int additional, int to
 void audio_init(void) {
     if (getenv("ICARUS_MUTE") && atoi(getenv("ICARUS_MUTE"))) master = 0;
     if (getenv("ICARUS_AUDIO_DUMP")) dump = fopen(getenv("ICARUS_AUDIO_DUMP"), "wb");
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "512");   // ~12 ms: sound effects follow the action
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) { fprintf(stderr, "SDL audio: %s\n", SDL_GetError()); return; }
     SDL_AudioSpec spec = { SDL_AUDIO_S16, 2, OUT_RATE };
     stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, mix_cb, 0);
