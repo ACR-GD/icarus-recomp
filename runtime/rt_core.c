@@ -38,7 +38,7 @@ _Noreturn void rt_fatal(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     fprintf(stderr, "FATAL: "); vfprintf(stderr, fmt, ap); fprintf(stderr, "\n");
     va_end(ap);
-    rt_dump_state(stderr);
+    if (MEM) rt_dump_state(stderr);   // no guest state yet during start-up checks
 #ifdef HAVE_BACKTRACE
     void *bt[48]; int n = backtrace(bt, 48);
     char **sym = backtrace_symbols(bt, n);

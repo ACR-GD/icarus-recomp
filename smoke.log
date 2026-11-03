@@ -1,0 +1,2 @@
+FATAL: game data folder 'no-such-dir' not found (see README: tools/prepare_data.sh)
+host backtrace: rt_fatal

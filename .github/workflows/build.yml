@@ -1,0 +1,61 @@
+name: build
+
+# The playable game cannot be built here: gen/ is translated from the copyrighted ICARUS.EXE,
+# which players supply from their own discs. CI checks that the runtime and tools compile and
+# link with SDL3 on every platform (against a stand-in gen/ with no game code) and that the
+# binary starts and reports missing game data cleanly.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    container: debian:trixie        # first Debian release that packages SDL3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq clang make pkg-config libsdl3-dev python3
+      - name: Build
+        run: |
+          make ci-stub
+          make -j"$(nproc)" CC=clang icarus build/is3unpack
+      - name: Smoke test
+        run: sh ci/smoke.sh ./icarus
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install sdl3 pkgconf
+      - name: Build
+        run: |
+          make ci-stub
+          make -j"$(sysctl -n hw.ncpu)" CC=clang icarus build/is3unpack
+      - name: Smoke test
+        run: sh ci/smoke.sh ./icarus
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: make
+          pacboy: clang:p sdl3:p pkgconf:p python:p
+      - name: Build
+        run: |
+          make ci-stub
+          make -j"$(nproc)" CC=clang icarus build/is3unpack
+      - name: Smoke test
+        run: sh ci/smoke.sh ./icarus.exe

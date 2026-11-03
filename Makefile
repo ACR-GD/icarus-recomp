@@ -6,6 +6,10 @@ SDL_LIBS   ?= $(shell pkg-config --libs sdl3 2>/dev/null || echo -L/opt/homebrew
 CFLAGS  = $(OPT) -g -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -D_GNU_SOURCE -Wno-unused-label -Wno-unused-variable \
           -Wno-parentheses-equality -Wno-unused-value -Wno-misleading-indentation -fno-strict-aliasing -fwrapv $(SDL_CFLAGS)
 LDLIBS  = $(SDL_LIBS) -lm -lpthread
+ifeq ($(OS),Windows_NT)
+# guest calls nest as host C calls; Windows' default 1 MB main-thread stack is too small
+LDLIBS += -Wl,--stack,33554432
+endif
 
 GEN_SRC = $(wildcard gen/*.c)
 RT_SRC  = $(wildcard runtime/*.c)
@@ -22,9 +26,13 @@ build/%.o: %.c runtime/rt.h runtime/win32.h
 gen: tools/recomp.py tools/pe.py
 	$(PY) -I tools/recomp.py data/ICARUS.EXE gen
 
+# CI: build the runtime against a stand-in gen/ that contains no game code
+ci-stub:
+	mkdir -p gen && cp ci/stub-gen/* gen/
+
 clean:
 	rm -rf build/gen build/runtime icarus
-.PHONY: gen clean
+.PHONY: gen clean ci-stub
 
 build/is3unpack: tools/is3unpack.c
 	@mkdir -p build

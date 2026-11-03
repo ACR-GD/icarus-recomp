@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
     snprintf(game_dir, sizeof game_dir, "%s", data);
     snprintf(cd_dir, sizeof cd_dir, "%s/cd", data);
     snprintf(save_dir, sizeof save_dir, "%s", getenv("ICARUS_SAVE") ? getenv("ICARUS_SAVE") : "save");
-    if (!is_dir(game_dir)) rt_fatal("game data folder '%s' not found (see README: tools/prepare_data.sh)", game_dir);
+    if (!is_dir(game_dir)) rt_fatal("game data folder '%s' not found (build it with: make data CD1=... CD2=..., see README)", game_dir);
 
     MEM = calloc(1, MEM_SIZE + 16);
     char img[1100]; snprintf(img, sizeof img, "%s/icarus.img", game_dir);

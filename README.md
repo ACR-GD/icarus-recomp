@@ -76,3 +76,9 @@ prebuilt binary that bundles them.
 
 Working: boot logos, title menu, intro movie (Cinepak + audio), prologue, CD music, sound effects,
 the opening scene and dialogue. See `NOTES.md` for what has and has not been tested yet.
+
+## Continuous integration
+
+`.github/workflows/build.yml` builds the runtime and tools on Linux (Debian trixie), macOS
+(Homebrew) and Windows (MSYS2 UCRT64, clang) against `ci/stub-gen`, a stand-in for `gen/` with no
+game code, and runs `ci/smoke.sh`. The playable game is only ever built locally from your own discs.
