@@ -124,6 +124,10 @@ static void SDLCALL mix_cb(void *ud, SDL_AudioStream *st, int additional, int to
 void audio_init(void) {
     if (getenv("ICARUS_MUTE") && atoi(getenv("ICARUS_MUTE"))) master = 0;
     if (getenv("ICARUS_AUDIO_DUMP")) dump = fopen(getenv("ICARUS_AUDIO_DUMP"), "wb");
+    // headless (test) runs never reach the speakers: SDL's dummy device still drives the mixer
+    // (so ICARUS_AUDIO_DUMP works) but plays nothing. ICARUS_MUTE=0 opts back in.
+    if (getenv("ICARUS_HEADLESS") && atoi(getenv("ICARUS_HEADLESS")) && !(getenv("ICARUS_MUTE") && !atoi(getenv("ICARUS_MUTE"))))
+        SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "512");   // ~12 ms: sound effects follow the action
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) { fprintf(stderr, "SDL audio: %s\n", SDL_GetError()); return; }
     SDL_AudioSpec spec = { SDL_AUDIO_S16, 2, OUT_RATE };
