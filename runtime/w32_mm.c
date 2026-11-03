@@ -64,13 +64,18 @@ static uint32_t m_timeKillEvent(void) {
 static uint32_t cd_notify_hwnd; static int cd_notify;
 static uint32_t cd_timefmt = 10;    // TMSF
 static int ntracks = 19;
-void mci_cd_finished(void) {
-    if (cd_notify && cd_notify_hwnd) {
-        cd_notify = 0;
-        extern void w32_post_message(uint32_t hwnd, uint32_t m, uint32_t w, uint32_t l);
-        w32_post_message(cd_notify_hwnd, 0x3b9 /*MM_MCINOTIFY*/, 1 /*SUCCESSFUL*/, CD_DEVICE);
-    }
+// MCI notification rules (as on Windows): a pending MCI_NOTIFY is answered exactly once with
+// SUCCESSFUL (track finished), SUPERSEDED (another PLAY replaced it) or ABORTED (STOP/PAUSE/CLOSE).
+// The game counts on this: when it starts a new track over a playing one it sets a flag to swallow
+// the SUPERSEDED message, so a missing one would eat the real end-of-track notice (no music loop).
+extern void w32_post_message(uint32_t hwnd, uint32_t m, uint32_t w, uint32_t l);
+static void cd_notify_send(uint32_t code) {
+    if (!cd_notify) return;
+    cd_notify = 0;
+    LOG("MM_MCINOTIFY %u\n", code);
+    if (cd_notify_hwnd) w32_post_message(cd_notify_hwnd, 0x3b9 /*MM_MCINOTIFY*/, code, CD_DEVICE);
 }
+void mci_cd_finished(void) { cd_notify_send(1 /*SUCCESSFUL*/); }
 static int track_secs(int t) {
     char p[1100]; snprintf(p, sizeof p, "%s/audio/track%02d.wav", cd_dir, t);
     FILE *f = fopen(p, "rb"); if (!f) return 0;
@@ -87,7 +92,7 @@ static uint32_t m_mciSendCommandA(void) {
         WR32(p + 4, CD_DEVICE);
         return 0;
     }
-    case 0x804: cdda_stop(); return 0;                      // MCI_CLOSE
+    case 0x804: return 0;   // MCI_CLOSE: like a real CD drive, playback continues after the handle is closed
     case 0x80d: if (flags & 0x400) cd_timefmt = RD32(p + 4); return 0;   // MCI_SET
     case 0x814: {   // MCI_STATUS
         uint32_t item = RD32(p + 8), trk = RD32(p + 12), r = 0;
@@ -110,12 +115,13 @@ static uint32_t m_mciSendCommandA(void) {
             uint32_t t = RD32(p + 8); to = (int)(t & 0xff);
             if (!(t >> 8) && to > from) to--;
         }
+        cd_notify_send(2 /*SUPERSEDED*/);
         cd_notify = (flags & 1) != 0; cd_notify_hwnd = RD32(p);
         LOG("MCI_PLAY tracks %d..%d notify=%d\n", from, to, cd_notify);
         cdda_play(from, to);
         return 0;
     }
-    case 0x808: case 0x809: cdda_stop(); return 0;           // MCI_STOP / PAUSE
+    case 0x808: case 0x809: case 0x807: cdda_stop(); cd_notify_send(4 /*ABORTED*/); return 0;   // STOP / PAUSE / SEEK
     default:
         LOG("mciSendCommand dev=%u msg=%x flags=%x\n", dev, msg, flags);
         return 0;
@@ -144,37 +150,105 @@ static uint32_t m_mciSendStringA(void) {
 static uint32_t m_mciGetErrorStringA(void) { if (ARG(1) && ARG(2)) gstr_put(ARG(1), "MCI error"); return 1; }
 
 // ---------------------------------------------------------------- mmio (RIFF files)
-#define NMM 32
-static FILE *mmf[NMM];
-static FILE *MMF(uint32_t h) { return (h >= 0x500 && h < 0x500 + NMM) ? mmf[h - 0x500] : 0; }
+// Each handle tracks its own position. Two things differ from a plain file wrapper:
+//  * The game loads sounds on demand and only closes the handle when the WAV parses; failed loads
+//    leak it (harmless on Windows). The table therefore reclaims the least recently used handle
+//    when it is full instead of failing every later load.
+//  * DROYSND.SNF entry 51 is a Sun/NeXT .snd (AU, mu-law) file that the game's RIFF parser cannot
+//    read. When the game seeks onto an AU header, reads from there come from a RIFF/WAVE image of
+//    the same sound (16-bit PCM), so the effect plays.
+#define NMM 64
+struct mmh { FILE *f; uint32_t last; long pos; uint8_t *virt; long vbase, vlen; };
+static struct mmh MM[NMM];
+static uint32_t mm_clock;
+static struct mmh *MMF(uint32_t h) {
+    if (h < 0x500 || h >= 0x500 + NMM || !MM[h - 0x500].f) return 0;
+    MM[h - 0x500].last = ++mm_clock;
+    return &MM[h - 0x500];
+}
+static void mm_drop(struct mmh *m) { if (m->f) fclose(m->f); free(m->virt); memset(m, 0, sizeof *m); }
+static long mm_read(struct mmh *m, void *buf, long n) {
+    long got = 0;
+    while (got < n) {
+        if (m->virt && m->pos >= m->vbase && m->pos < m->vbase + m->vlen) {
+            long k = m->vbase + m->vlen - m->pos; if (k > n - got) k = n - got;
+            memcpy((uint8_t *)buf + got, m->virt + (m->pos - m->vbase), (size_t)k);
+            m->pos += k; got += k; continue;
+        }
+        fseek(m->f, m->pos, SEEK_SET);
+        long k = (long)fread((uint8_t *)buf + got, 1, (size_t)(n - got), m->f);
+        m->pos += k; got += k;
+        if (k <= 0) break;
+    }
+    return got;
+}
+static int16_t ulaw(uint8_t u) {
+    u = (uint8_t)~u;
+    int t = ((u & 0x0f) << 3) + 0x84; t <<= (u & 0x70) >> 4;
+    return (int16_t)((u & 0x80) ? (0x84 - t) : (t - 0x84));
+}
+static uint32_t be32(const uint8_t *b) { return (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3]; }
+// if an AU header sits at the current position, build the RIFF image there
+static void mm_check_au(struct mmh *m) {
+    uint8_t h[24];
+    fseek(m->f, m->pos, SEEK_SET);
+    if (fread(h, 1, 24, m->f) != 24 || memcmp(h, ".snd", 4)) return;
+    uint32_t off = be32(h + 4), size = be32(h + 8), enc = be32(h + 12), rate = be32(h + 16), ch = be32(h + 20);
+    if ((enc != 1 && enc != 2) || ch < 1 || ch > 2 || size > (8u << 20)) return;
+    uint8_t *src = malloc(size);
+    fseek(m->f, m->pos + (long)off, SEEK_SET);
+    size = (uint32_t)fread(src, 1, size, m->f);
+    uint32_t n = size, dbytes = n * 2;
+    free(m->virt);
+    m->virt = malloc(44 + dbytes); m->vbase = m->pos; m->vlen = 44 + dbytes;
+    uint8_t *w = m->virt;
+    #define P32(o, v) do { uint32_t v_ = (v); memcpy(w + (o), &v_, 4); } while (0)
+    #define P16(o, v) do { uint16_t v_ = (uint16_t)(v); memcpy(w + (o), &v_, 2); } while (0)
+    memcpy(w, "RIFF", 4); P32(4, 36 + dbytes); memcpy(w + 8, "WAVEfmt ", 8); P32(16, 16);
+    P16(20, 1); P16(22, ch); P32(24, rate); P32(28, rate * ch * 2); P16(32, ch * 2); P16(34, 16);
+    memcpy(w + 36, "data", 4); P32(40, dbytes);
+    for (uint32_t k = 0; k < n; k++) {
+        int16_t v = enc == 1 ? ulaw(src[k]) : (int16_t)((int8_t)src[k] * 256);
+        memcpy(w + 44 + 2 * k, &v, 2);
+    }
+    free(src);
+    LOG("mmio: AU sound at %ld (%u Hz, %u bytes) presented as WAV\n", m->pos, rate, n);
+}
 static uint32_t m_mmioOpenA(void) {
     char name[512], hp[1024]; gstr_get(ARG(0), name, sizeof name);
     if (!host_path(name, hp, sizeof hp, 0)) { LOG("mmioOpen %s: not found\n", name); return 0; }
     FILE *f = fopen(hp, "rb"); if (!f) return 0;
-    for (int k = 0; k < NMM; k++) if (!mmf[k]) { mmf[k] = f; return 0x500u + k; }
-    fclose(f); return 0;
+    int k, lru = 0;
+    for (k = 0; k < NMM && MM[k].f; k++) if (MM[k].last < MM[lru].last) lru = k;
+    if (k == NMM) { LOG("mmio: handle table full, reclaiming %x\n", 0x500 + lru); mm_drop(&MM[lru]); k = lru; }
+    MM[k].f = f; MM[k].last = ++mm_clock; MM[k].pos = 0;
+    return 0x500u + (uint32_t)k;
 }
-static uint32_t m_mmioClose(void) { FILE *f = MMF(ARG(0)); if (f) { fclose(f); mmf[ARG(0) - 0x500] = 0; } return 0; }
-static uint32_t m_mmioRead(void) { FILE *f = MMF(ARG(0)); if (!f) return 0xffffffffu; return (uint32_t)fread(GP(ARG(1)), 1, ARG(2), f); }
+static uint32_t m_mmioClose(void) { struct mmh *m = MMF(ARG(0)); if (m) mm_drop(m); return 0; }
+static uint32_t m_mmioRead(void) { struct mmh *m = MMF(ARG(0)); if (!m) return 0xffffffffu; return (uint32_t)mm_read(m, GP(ARG(1)), (long)ARG(2)); }
 static uint32_t m_mmioSeek(void) {
-    FILE *f = MMF(ARG(0)); if (!f) return 0xffffffffu;
-    fseek(f, (int32_t)ARG(1), ARG(2) == 0 ? SEEK_SET : ARG(2) == 1 ? SEEK_CUR : SEEK_END);
-    return (uint32_t)ftell(f);
+    struct mmh *m = MMF(ARG(0)); if (!m) return 0xffffffffu;
+    long off = (int32_t)ARG(1);
+    if (ARG(2) == 0) m->pos = off;
+    else if (ARG(2) == 1) m->pos += off;
+    else { fseek(m->f, 0, SEEK_END); m->pos = ftell(m->f) + off; }
+    mm_check_au(m);
+    return (uint32_t)m->pos;
 }
-static uint32_t rd_le32(FILE *f) { uint8_t b[4]; if (fread(b, 1, 4, f) != 4) return 0xffffffffu; return b[0] | b[1] << 8 | b[2] << 16 | (uint32_t)b[3] << 24; }
+static uint32_t rd_le32(struct mmh *m) { uint8_t b[4]; if (mm_read(m, b, 4) != 4) return 0xffffffffu; return b[0] | b[1] << 8 | b[2] << 16 | (uint32_t)b[3] << 24; }
 static uint32_t m_mmioDescend(void) {
-    FILE *f = MMF(ARG(0)); uint32_t ck = ARG(1), parent = ARG(2), flags = ARG(3);
-    if (!f) return 265;
+    struct mmh *m = MMF(ARG(0)); uint32_t ck = ARG(1), parent = ARG(2), flags = ARG(3);
+    if (!m) return 265;
     long end = parent ? (long)(RD32(parent + 12) + RD32(parent + 4)) : 0x7fffffff;
     uint32_t want_id = RD32(ck), want_type = RD32(ck + 8);
     for (;;) {
-        long at = ftell(f);
+        long at = m->pos;
         if (at + 8 > end) return 265;   // MMIOERR_CHUNKNOTFOUND
-        uint32_t id = rd_le32(f), size = rd_le32(f);
-        if (id == 0xffffffffu) return 265;
+        uint32_t id = rd_le32(m), size = rd_le32(m);
+        if (id == 0xffffffffu || size == 0xffffffffu) return 265;
         uint32_t type = 0;
         int is_list = id == 0x46464952u /*RIFF*/ || id == 0x5453494cu /*LIST*/;
-        if (is_list) type = rd_le32(f);
+        if (is_list) type = rd_le32(m);
         int match = 1;
         if (flags & 0x10) match = id == want_id;                         // FINDCHUNK
         if (flags & 0x20) match = id == 0x46464952u && type == want_type; // FINDRIFF
@@ -184,13 +258,13 @@ static uint32_t m_mmioDescend(void) {
             WR32(ck + 12, (uint32_t)(at + 8)); WR32(ck + 16, 0);
             return 0;
         }
-        fseek(f, at + 8 + size + (size & 1), SEEK_SET);
+        m->pos = at + 8 + (long)size + (size & 1);
     }
 }
 static uint32_t m_mmioAscend(void) {
-    FILE *f = MMF(ARG(0)); uint32_t ck = ARG(1); if (!f) return 0;
+    struct mmh *m = MMF(ARG(0)); uint32_t ck = ARG(1); if (!m) return 0;
     uint32_t size = RD32(ck + 4);
-    fseek(f, (long)(RD32(ck + 12) + size + (size & 1)), SEEK_SET);
+    m->pos = (long)(RD32(ck + 12) + size + (size & 1));
     return 0;
 }
 

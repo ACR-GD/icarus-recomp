@@ -229,7 +229,10 @@ def is_far_indirect(i):
     return b[k] == 0xff and ((b[k+1] >> 3) & 7) in (3, 5)
 
 # Entry hooks: C inserted at the top of a function, before its first instruction.
-HOOKS = {}
+HOOKS = {
+    # per-character text routine: replaced by runtime/text.c (anti-aliased proportional font)
+    0x449f60: 'if (text_glyph_hook()) { RET(8); return; }',
+}
 # Idle points: heads of loops that only poll for time; the generated code yields there.
 IDLE = set()
 

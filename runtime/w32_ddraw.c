@@ -58,6 +58,21 @@ static void present(void) {
     video_present(p->pixels, p->pitch, p->w, p->h, p->bpp, pal);
     dirty = 0;
 }
+// palette the screen is shown with, and a counter that changes whenever its colours change
+static uint32_t pal_gen;
+const uint32_t *ddraw_screen_palette(uint32_t *gen) {
+    if (primary < 0) return 0;
+    *gen = pal_gen ^ ((uint32_t)S_[primary].pal << 24);
+    return S_[primary].pal >= 0 ? P_[S_[primary].pal].rgb : default_pal;
+}
+// surface whose pixel memory contains addr (for clipping text drawn into it)
+int ddraw_find_surface(uint32_t addr, uint32_t *base, uint32_t *end) {
+    for (int k = 1; k < NS; k++) if (S_[k].used) {
+        uint32_t b = S_[k].pixels, e = b + (uint32_t)(S_[k].pitch * S_[k].h);
+        if (addr >= b && addr < e) { *base = b; *end = e; return 1; }
+    }
+    return 0;
+}
 // called from PeekMessage-level code paths too, so that games drawing straight into the
 // primary surface without Flip still get shown
 void ddraw_present_if_dirty(void) { if (dirty) present(); }
@@ -306,6 +321,7 @@ static uint32_t p_SetEntries(void) {
     struct pal *p = PL(THIS); uint32_t start = ARG(2), n = ARG(3), e = ARG(4);
     for (uint32_t k = 0; k < n && start + k < 256; k++)
         p->rgb[start + k] = 0xff000000u | (RD8(e + 4 * k) << 16) | (RD8(e + 4 * k + 1) << 8) | RD8(e + 4 * k + 2);
+    pal_gen++;
     // a palette change on screen is a displayed frame: pace it like a flip (title screen loop)
     if (primary >= 0 && S_[primary].pal == (int)(p - P_)) { host_frame_pace(); dirty = 1; present(); }
     return DD_OK;

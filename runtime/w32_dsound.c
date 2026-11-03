@@ -35,6 +35,8 @@ static int open_track(int t) {
     cd_f = fopen(p, "rb");
     if (!cd_f) { LOG("cd: no %s\n", p); return 0; }
     fseek(cd_f, 0, SEEK_END); cd_end = ftell(cd_f); fseek(cd_f, 44, SEEK_SET);
+    // ICARUS_CDDA_MAXSEC=n cuts every track to n seconds (testing track-end handling)
+    if (getenv("ICARUS_CDDA_MAXSEC")) { long lim = 44 + atol(getenv("ICARUS_CDDA_MAXSEC")) * 176400L; if (lim < cd_end) cd_end = lim; }
     cd_track = t;
     return 1;
 }
@@ -95,7 +97,9 @@ static void SDLCALL mix_cb(void *ud, SDL_AudioStream *st, int additional, int to
         if (cd_playing_flag && cd_f) {
             int16_t tmp[4096 * 2]; int got = 0;
             while (got < n) {
-                size_t rd = fread(tmp + 2 * got, 4, (size_t)(n - got), cd_f);
+                long left = (cd_end - ftell(cd_f)) / 4; if (left < 0) left = 0;
+                size_t want = (size_t)(n - got) < (size_t)left ? (size_t)(n - got) : (size_t)left;
+                size_t rd = fread(tmp + 2 * got, 4, want, cd_f);
                 got += (int)rd;
                 if (got < n) {
                     if (cd_track < cd_to && open_track(cd_track + 1)) continue;
@@ -168,6 +172,7 @@ static uint32_t ds_GetCaps(void) { memset(GP(ARG(1) + 4), 0, 92); WR32(ARG(1) + 
 // ---------------------------------------------------------------- IDirectSoundBuffer
 static uint32_t b_Release(void) {
     struct dsbuf *b = BF(THIS);
+    LOG("snd release #%u\n", RD32(THIS + 4));
     lock(); b->playing = 0; b->used = 0; unlock();
     // shared data of duplicated buffers is left to the heap (never freed while another copy uses it)
     return 0;
@@ -206,7 +211,8 @@ static uint32_t b_Lock(void) {
     return DS_OK;
 }
 static uint32_t b_Unlock(void) { return DS_OK; }
-static uint32_t b_Play(void) { struct dsbuf *b = BF(THIS); lock(); b->playing = 1; b->loop = (ARG(3) & 1) != 0; unlock(); return DS_OK; }
+static uint32_t b_Play(void) { struct dsbuf *b = BF(THIS);
+    LOG("snd play #%u size=%u %dHz vol=%d pan=%d loop=%d pos=%u (from %08x)\n", RD32(THIS + 4), b->size, b->rate, b->vol, b->pan, (ARG(3) & 1) != 0, (uint32_t)b->pos, RD32(ESP)); lock(); b->playing = 1; b->loop = (ARG(3) & 1) != 0; unlock(); return DS_OK; }
 static uint32_t b_Stop(void) { struct dsbuf *b = BF(THIS); lock(); b->playing = 0; unlock(); return DS_OK; }
 static uint32_t b_SetCurrentPosition(void) { struct dsbuf *b = BF(THIS); lock(); b->pos = ARG(1); unlock(); return DS_OK; }
 static uint32_t b_SetFormat(void) {

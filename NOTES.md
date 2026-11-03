@@ -35,12 +35,40 @@
   title menu headless.
 
 ## Not verified yet
+* Which skill uses DROYSND.SNF entry 51 (Power Wave is the suspect). Entry numbers come from
+  data tables, so `ICARUS_SNDTEST` was used to check that entry 51 now loads and plays.
 * Save / load from the in-game menu. Saves go to `save/`; copy-on-write keeps `data/` pristine.
 * Listening to the audio by ear. `ICARUS_AUDIO_DUMP` shows the title CD track and the movie
   soundtrack reach the mixer at normal levels. Battle sound effects use the same DirectSound path.
 * ENDING.AVI, later chapters, every spell or effect path.
 * A Windows build (the code avoids POSIX-only APIs except `dirent.h` and `mkdir`, which MinGW-w64
   provides).
+
+## Text
+* Dialogue lives in `edata/EVENTnn.DAT` as plain ASCII: a space-padded speaker name, then
+  NUL-terminated lines (the start of each file still has Korean leftovers).
+* Font: `ENGLISH.FNT`, 256 glyphs of 8x16 one-bit cells in CP437 layout, loaded to 0x5eb030
+  (`HANGUL.FNT` for two-byte Korean text, unused in this release).
+* Every character goes through 0x449f60(char, colour). It copies the glyph and plots its set bits in
+  one palette colour into the 8-bit buffer [0x5ecb30] (pitch [0x531374]) at pen
+  ([0x5eedbc], [0x5eedc0]), then advances the pen 9 px (4 px for a space). 0x44a000 draws a
+  string; 0x44a0d0 is the typewriter used by dialogue boxes, which redraws the text every frame.
+* `runtime/text.c` hooks 0x449f60: anti-aliased Crimson Pro SemiBold 16 px on the same baseline
+  (row 11), proportional advance, shadow at +1,+1, coverage blended through the screen palette.
+
+## Sound
+* UI sounds: `DROYSNDT.SNF`. Game and battle sounds: `DROYSND.SNF`, 81 entries (u16 count, u32
+  offsets, then WAV files). They are loaded on demand through 0x444120(slot, entry): fopen to read
+  the offset, `mmioOpen` + `mmioSeek`, then the RIFF parser at 0x450cf0, then a DirectSound buffer
+  in one of the slots. Playback goes through 0x4485b0 → 0x432290 (SetCurrentPosition(0), Play).
+* The parser only closes the mmio handle on success. Entry 51 is a Sun `.snd` (mu-law, 22 kHz),
+  not a WAV, so every attempt to load it leaked a handle and failed. With 32 emulated handles the
+  leaks eventually disabled all sound loading. The runtime now reclaims handles (LRU) and presents
+  AU entries as WAV, so entry 51 plays. On the original release it was most likely silent.
+* CD music: on PLAY over a playing track the game sets a flag to ignore the next MM_MCINOTIFY
+  (expecting MCI_NOTIFY_SUPERSEDED). Without SUPERSEDED/ABORTED notifications the real
+  end-of-track notice was eaten and music never looped. Notifications are now delivered from the
+  event pump.
 
 ## Debugging tips
 * `ICARUS_TRACE=1 ICARUS_TRACE_QUIET=PeekMessageA,GetLocalTime,GetSystemTime,SetEntries,SetPalette`

@@ -19,6 +19,7 @@ Nothing is emulated at run time: no Windows, no Wine, no CPU interpreter.
 | `runtime/w32_dsound.c` | DirectSound buffers mixed in software, plus the CD audio music tracks. |
 | `runtime/w32_mm.c` | Multimedia timers (delivered on the game thread), MCI `cdaudio`, the `mmio` RIFF reader. |
 | `runtime/w32_avi.c` | AVIFile stream reading and a Cinepak decoder for the game's own movie player. |
+| `runtime/text.c` | Replacement text renderer: anti-aliased, proportional Crimson Pro glyphs blended through the game palette (`ICARUS_FONT=original` for the 1998 font). |
 | `tools/prepare_data.py`, `tools/is3unpack.c` | Rebuild the installed game from the original discs: ISO9660 extraction, the InstallShield 3 `.Z` archives (PKWARE DCL), and the CD audio tracks. |
 
 ## You need
@@ -59,11 +60,22 @@ the prologue. Alt+Enter toggles fullscreen.
 | `ICARUS_VERBOSE=1` | Log files, surfaces, sound buffers and MCI calls. |
 | `ICARUS_TRACE=1` | Log every Win32/COM call (`ICARUS_TRACE_QUIET=Name1,Name2` hides noisy ones). |
 | `ICARUS_HEADLESS=1` | No window (testing). With `ICARUS_SHOT=file%04d.ppm` and `ICARUS_SHOT_EVERY=n` it saves frames. |
+| `ICARUS_FONT=original` | Use the game's original 8x16 bitmap font instead of the anti-aliased replacement. |
 | `ICARUS_AUDIO_DUMP=file.raw` | Also write the mixed audio (s16 stereo 44.1 kHz) to a file. |
 | `ICARUS_FPS=n` | Vertical-blank rate that Flip and on-screen palette changes are paced to (default 60). |
 | `ICARUS_KEYS=t:vk,...`, `ICARUS_CLICKS=t:x:y[:right],...` | Scripted input at t seconds (testing). |
 
-`tools/run_headless.sh SECONDS` and `tools/shots.sh T...` wrap the testing knobs.
+| `ICARUS_SNDTEST=slot:entry,...` | Testing: 20 s in, load and play DROYSND.SNF entries through the game's own loader. |
+| `ICARUS_CDDA_MAXSEC=n` | Testing: cut every CD track to n seconds (checks music looping). |
+
+`tools/run_headless.sh SECONDS` and `tools/shots.sh T...` wrap the testing knobs. Test runs use
+`build/testsave`, never `save/`.
+
+## Credits
+
+The replacement dialogue font is [Crimson Pro](https://github.com/Fonthausen/CrimsonPro) by the
+Crimson Pro Project Authors, under the SIL Open Font License 1.1 (`tools/fonts/CrimsonPro-OFL.txt`).
+`runtime/font_text.h` is generated from it by `tools/mkfont_ttf.py`.
 
 ## Sharing it
 

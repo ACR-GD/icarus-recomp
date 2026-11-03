@@ -181,8 +181,10 @@ void video_present(uint32_t pixels, int pitch, int w, int h, int bpp, const uint
 
 // ---------------------------------------------------------------- event pump
 static int quit_posted;
+void audio_poll(void);
 void w32_pump_events(void) {
     run_script();
+    audio_poll();      // CD track finished -> MM_MCINOTIFY
     SDL_Event e;
     if (headless) {   // still honour SIGINT/SIGTERM (SDL turns them into a quit event)
         while (SDL_PollEvent(&e)) if (e.type == SDL_EVENT_QUIT) { w32_shutdown(); exit(0); }
@@ -260,8 +262,25 @@ static void put_msg(uint32_t p, struct msg *m) {
     WR32(p, m->hwnd); WR32(p + 4, m->msg); WR32(p + 8, m->w); WR32(p + 12, m->l); WR32(p + 16, w32_tick_ms());
     WR32(p + 20, (uint32_t)mouse_x); WR32(p + 24, (uint32_t)mouse_y);
 }
+// ICARUS_SNDTEST="slot:entry,..." (testing): 20 s after start, load DROYSND.SNF entries through
+// the game's own on-demand loader (0x444120) and play them (0x4485b0), one per second.
+static void sound_test(void) {
+    static const char *spec; static int init, idx; static uint32_t next;
+    if (!init) { init = 1; spec = getenv("ICARUS_SNDTEST"); next = 20000; }
+    if (!spec || !*spec || SDL_GetTicks() - t0_ms < next) return;
+    int slot, entry, n = 0;
+    if (sscanf(spec, "%d:%d%n", &slot, &entry, &n) != 2) { spec = 0; return; }
+    spec += n; if (*spec == ',') spec++;
+    next += 1000; idx++;
+    uint32_t a1[2] = { (uint32_t)slot, (uint32_t)entry };
+    guest_call(0x444120, 2, a1);
+    uint32_t a2[3] = { (uint32_t)slot, 0, 0x2b11 };
+    uint32_t r = guest_call(0x4485b0, 3, a2);
+    fprintf(stderr, "sndtest: slot %d entry %d -> play %u\n", slot, entry, r);
+}
 static uint32_t u_PeekMessageA(void) {
     static uint32_t last_pump;
+    sound_test();
     uint32_t now = w32_tick_ms();
     if (now != last_pump || mq_r == mq_w) { w32_pump_events(); last_pump = now; }
     if (mq_r == mq_w) {
