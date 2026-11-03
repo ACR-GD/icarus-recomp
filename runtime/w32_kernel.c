@@ -1,5 +1,6 @@
 // KERNEL32 emulation: host-function registry, guest heap, files, process/environment queries.
 #include "win32.h"
+#include <SDL3/SDL_time.h>
 #include <time.h>
 #include <dirent.h>
 #include <strings.h>
@@ -411,16 +412,16 @@ static void put_systime(uint32_t p, struct tm *t, int ms) {
 }
 int64_t w32_time_skew;   // seconds added to the guest clock (boot-logo skipping)
 static void now_tm(struct tm *t, int *ms, int local) {
-    struct timespec ts; timespec_get(&ts, TIME_UTC);
+    SDL_Time now = 0; SDL_GetCurrentTime(&now);       // ns since 1970 (portable, incl. MinGW)
     extern int logo_skip, title_reached;
     if (logo_skip && !title_reached) w32_time_skew += 2;   // waits on time() end quickly while skipping
-    time_t s = ts.tv_sec + (time_t)w32_time_skew;
+    time_t s = (time_t)(now / 1000000000) + (time_t)w32_time_skew;
 #ifdef _WIN32
     if (local) localtime_s(t, &s); else gmtime_s(t, &s);
 #else
     if (local) localtime_r(&s, t); else gmtime_r(&s, t);
 #endif
-    *ms = (int)(ts.tv_nsec / 1000000);
+    *ms = (int)((now / 1000000) % 1000);
 }
 static uint32_t k_GetLocalTime(void) { struct tm t; int ms; now_tm(&t, &ms, 1); put_systime(ARG(0), &t, ms); return 0; }
 static uint32_t k_GetSystemTime(void) { struct tm t; int ms; now_tm(&t, &ms, 0); put_systime(ARG(0), &t, ms); return 0; }

@@ -15,3 +15,5 @@ __pycache__/
 icarus.cfg
 screenshots/
 smoke.log
+dist/
+.claude/

@@ -1,0 +1,63 @@
+ICARUS: SANCTUARY OF THE GODS
+Recomp by Second Save
+=============================
+
+A native version of the 1998 Windows RPG Icarus: Sanctuary of the Gods (Droiyan) for modern
+macOS, Windows and Linux.
+
+YOU NEED YOUR OWN COPY OF THE GAME
+----------------------------------
+This download contains NO game files: no graphics, music, maps, movies or text. To play, you
+need the two original Icarus CDs, as disc images:
+
+  * Disc 1 and Disc 2 as .cue + .bin files (best: disc 2's .cue gives you the CD music),
+  * or .bin / .iso files (the game works, without the CD music).
+
+Please don't ask for, or share, disc images. This project is unofficial and not affiliated with
+the game's publisher or developer.
+
+HOW TO PLAY
+-----------
+1. Start Icarus. The launcher opens.
+2. Click "Browse..." next to Disc 1 and pick your disc 1 image, then do the same for Disc 2.
+3. Click "Install". The game files are unpacked from your discs (a few seconds).
+4. Choose your settings and click "Play".
+
+Your discs are only read, never changed. Game data, saves and settings are kept in:
+  macOS    ~/Library/Application Support/Second Save/Icarus
+  Windows  %APPDATA%\Second Save\Icarus
+  Linux    ~/.local/share/Second Save/Icarus
+("Open save folder" in the launcher takes you there.)
+
+CONTROLS
+--------
+The game is played with the mouse. Extra keys added by this version:
+  Hold Tab        fast-forward (4x)
+  F11, Alt+Enter  fullscreen on/off
+  F12             screenshot (saved in "screenshots", next to the save folder)
+  Space / click   skip the intro movie; Esc skips the prologue
+  Click / any key during the boot logos skips them
+
+FIRST LAUNCH ON MACOS
+---------------------
+The app is not notarized by Apple. The first time, right-click Icarus.app and choose "Open",
+then "Open" again. If macOS still refuses, go to System Settings > Privacy & Security and
+click "Open Anyway".
+
+FIRST LAUNCH ON WINDOWS
+-----------------------
+Windows SmartScreen may warn that the program is unrecognized: click "More info", then
+"Run anyway".
+
+LINUX
+-----
+Run ./icarus from this folder. The file picker uses your desktop's file chooser (portal or
+zenity). SDL3 is included.
+
+CREDITS
+-------
+Recompilation, runtime and launcher: Second Save.
+Dialogue and launcher font: Crimson Pro by the Crimson Pro Project Authors (SIL Open Font
+License 1.1, see OFL.txt).
+Uses SDL3 (zlib license, see SDL-LICENSE.txt).
+Icarus: Sanctuary of the Gods / Droiyan (c) 1998 its respective owners.

@@ -3,7 +3,10 @@ CC      ?= clang
 OPT     ?= -O2
 SDL_CFLAGS ?= $(shell pkg-config --cflags sdl3 2>/dev/null || echo -I/opt/homebrew/opt/sdl3/include)
 SDL_LIBS   ?= $(shell pkg-config --libs sdl3 2>/dev/null || echo -L/opt/homebrew/opt/sdl3/lib -lSDL3)
-CFLAGS  = $(OPT) -g -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -D_GNU_SOURCE -Wno-unused-label -Wno-unused-variable \
+BUILD   ?= build
+BIN     ?= icarus
+EXTRA   ?=
+CFLAGS  = $(OPT) $(EXTRA) -g -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -D_GNU_SOURCE -Wno-unused-label -Wno-unused-variable \
           -Wno-parentheses-equality -Wno-unused-value -Wno-misleading-indentation -fno-strict-aliasing -fwrapv $(SDL_CFLAGS)
 LDLIBS  = $(SDL_LIBS) -lm -lpthread
 ifeq ($(OS),Windows_NT)
@@ -13,13 +16,13 @@ endif
 
 GEN_SRC = $(wildcard gen/*.c)
 RT_SRC  = $(wildcard runtime/*.c)
-OBJ     = $(patsubst %.c,build/%.o,$(GEN_SRC) $(RT_SRC))
+OBJ     = $(patsubst %.c,$(BUILD)/%.o,$(GEN_SRC) $(RT_SRC))
 PY      ?= build/venv/bin/python
 
-icarus: $(OBJ)
-	$(CC) -o $@ $(OBJ) $(LDLIBS)
+$(BIN): $(OBJ)
+	$(CC) $(EXTRA) -o $@ $(OBJ) $(LDLIBS) $(LDEXTRA)
 
-build/%.o: %.c runtime/rt.h runtime/win32.h
+$(BUILD)/%.o: %.c runtime/rt.h runtime/win32.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

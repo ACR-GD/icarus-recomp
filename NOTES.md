@@ -99,6 +99,25 @@
 * Measured with a second-difference click detector over 12 s of the movie: 525/487 click events
   (L/R) before, 0 after; the soundtrack itself has 0.
 
+## Releases
+Downloads contain the recompiled program, SDL3, the launcher and licences, but no game files.
+Players install from their own discs through the launcher. `packaging/HOW-TO-PLAY.txt` says so.
+* Prerequisites in build/dist-src: SDL3 source (SDL3-<v>.tar.gz) and SDL3-devel-<v>-mingw.tar.gz
+  from https://github.com/libsdl-org/SDL/releases. macOS universal SDL3:
+  `cmake -S SDL3-<v> -B sdl-mac -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_INSTALL_PREFIX=$PWD/sdl-mac-inst`, then build and install.
+* Icon: `tools/mkicon.py CrimsonPro.ttf dist/assets` + `iconutil -c icns dist/assets/Icarus.iconset`.
+* `tools/release_mac.sh`: universal Icarus.app (macOS 11+, stripped, ad-hoc signed), Icarus-macOS.zip.
+* `tools/release_windows.sh`: MinGW-w64 in Docker, Icarus.exe (static runtime, 32 MB stack, icon) +
+  SDL3.dll, Icarus-Windows.zip. Imports only KERNEL32, msvcrt, SDL3.
+* `tools/release_linux.sh`: Ubuntu 22.04 x86-64 container (emulated on Apple Silicon, ~2 min after the
+  first SDL3 build), bundled libSDL3 via a `$ORIGIN/lib` RUNPATH (patchelf), glibc 2.34+.
+* Verified 2026-11-04: Mac app installed from the discs through its launcher and ran; Windows build
+  ran under Wine through the intro movie, prologue and into the first battle; Linux build reached the
+  title in a clean Ubuntu 22.04. Untested: the Intel slice of the Mac app (no Rosetta here), a real
+  Windows PC, a Linux desktop session (the file picker needs xdg-desktop-portal or zenity).
+* Before publishing: check the archives (`unzip -l`, `tar -tzvf`) for game files and personal paths.
+
 ## Debugging tips
 * `ICARUS_TRACE=1 ICARUS_TRACE_QUIET=PeekMessageA,GetLocalTime,GetSystemTime,SetEntries,SetPalette`
   gives a readable API log.

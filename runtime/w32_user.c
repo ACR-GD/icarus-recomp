@@ -198,14 +198,17 @@ static void write_ppm(const char *path, int w, int h) {
 }
 // F12: save the current frame as a BMP in screenshots/
 static void save_screenshot(void) {
-    MKDIR("screenshots");
-    char name[128]; time_t t = time(0); struct tm tmv;
+    // next to the save folder (the per-user folder, or the working folder in the developer layout)
+    char dir[1100]; snprintf(dir, sizeof dir, "%s/../screenshots", save_dir);
+    MKDIR(dir);
+    char name[1200], stamp[64]; time_t t = time(0); struct tm tmv;
 #ifdef _WIN32
     localtime_s(&tmv, &t);
 #else
     localtime_r(&t, &tmv);
 #endif
-    strftime(name, sizeof name, "screenshots/icarus-%Y%m%d-%H%M%S.bmp", &tmv);
+    strftime(stamp, sizeof stamp, "icarus-%Y%m%d-%H%M%S.bmp", &tmv);
+    snprintf(name, sizeof name, "%s/%s", dir, stamp);
     SDL_Surface *sf = SDL_CreateSurfaceFrom(cur_w, cur_h, SDL_PIXELFORMAT_XRGB8888, rgba_buf, cur_w * 4);
     if (sf && SDL_SaveBMP(sf, name)) fprintf(stderr, "screenshot: %s\n", name);
     SDL_DestroySurface(sf);
