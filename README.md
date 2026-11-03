@@ -1,5 +1,9 @@
 # Icarus: Sanctuary of the Gods (Droiyan), static recompilation
 
+**Recomp by Second Save**
+
+![Launcher](docs/launcher.png)
+
 A native port of the 1998 Windows 95 RPG *Icarus: Sanctuary of the Gods* (Korean title *Droiyan*,
 KRG Soft / JC Research) for macOS, Linux and Windows. The game's x86 code (`ICARUS.EXE`, MSVC 5) is
 translated to C ahead of time, and a small runtime replaces the Win32 / DirectX 5 APIs it used with
@@ -19,6 +23,7 @@ Nothing is emulated at run time: no Windows, no Wine, no CPU interpreter.
 | `runtime/w32_dsound.c` | DirectSound buffers mixed in software, plus the CD audio music tracks. |
 | `runtime/w32_mm.c` | Multimedia timers (delivered on the game thread), MCI `cdaudio`, the `mmio` RIFF reader. |
 | `runtime/w32_avi.c` | AVIFile stream reading and a Cinepak decoder for the game's own movie player. |
+| `runtime/launcher.c`, `runtime/installer.c` | Launcher window and the disc installer (ISO9660, InstallShield 3 via `runtime/is3.h`, CD audio, EXE check, memory image). |
 | `runtime/qol.c` | Hardware cursor from the game's sprites, dialogue speed. |
 | `runtime/text.c` | Replacement text renderer: anti-aliased, proportional Crimson Pro glyphs blended through the game palette (`ICARUS_FONT=original` for the 1998 font). |
 | `tools/prepare_data.py`, `tools/is3unpack.c` | Rebuild the installed game from the original discs: ISO9660 extraction, the InstallShield 3 `.Z` archives (PKWARE DCL), and the CD audio tracks. |
@@ -28,6 +33,24 @@ Nothing is emulated at run time: no Windows, no Wine, no CPU interpreter.
 * The two original discs as BIN/CUE images (`ICAR_CD1.cue/.bin`, `ICAR_CD2.cue/.bin`).
 * A C compiler (clang or gcc; MinGW-w64 on Windows) and SDL3 (`brew install sdl3`, `apt install libsdl3-dev`, MSYS2 `mingw-w64-x86_64-SDL3`).
 * Python 3 with `capstone` and `pefile` to regenerate `gen/` (`pip install capstone pefile`).
+
+## Launcher
+
+Running `icarus` opens the launcher:
+
+* **Game discs:** pick disc 1 and disc 2 (`.cue` + `.bin`, a bare `.bin`, or `.iso`), then
+  **Install**. The game files are unpacked from the original installer archives, `ICARUS.EXE` is
+  checked against the release this build was made from, and the CD music is saved. This takes a
+  few seconds; disc 2 must be a `.cue` for the music. Disc images are only read.
+* **Settings:** window size, fullscreen, scaling, frame rate, mouse cursor, dialogue speed and
+  font, sound, and whether to show the launcher at startup. Left-click a setting for the next value,
+  right-click for the previous one.
+* **Play** (or Enter) starts the game; Esc quits. `icarus --play` skips the launcher.
+
+Data, saves and settings are stored per user: `~/Library/Application Support/Second Save/Icarus`
+(macOS), `%APPDATA%\Second Save\Icarus` (Windows), `~/.local/share/Second Save/Icarus` (Linux).
+When the working folder has a `data/` folder (developer layout, see below), `data/`, `save/` and
+`icarus.cfg` there are used instead.
 
 ## Build
 
@@ -92,7 +115,9 @@ Settings live in `icarus.cfg` (created on first run, next to where you start the
 | `ICARUS_HWCURSOR=0` | Draw the cursor in the game frame instead of as the system cursor. |
 | `ICARUS_VSYNC=0` | No vsync; host pacing at 60 fps. |
 | `ICARUS_STATS=1` | Print presents/flips per second and the worst frame gap. |
-| `ICARUS_CONFIG=file` | Settings file (default `icarus.cfg`). |
+| `ICARUS_CONFIG=file` | Settings file (default: per-user folder, or `icarus.cfg` in the developer layout). |
+| `ICARUS_LAUNCHER=0` | Do not show the launcher (same as `LAUNCHER = 0` in the settings). |
+| `ICARUS_LAUNCHER_SHOT=f.bmp`, `ICARUS_LAUNCHER_AUTO=play\|install\|quit` | Testing: capture the launcher, then act. |
 | `ICARUS_KEYS=t:vk,...`, `ICARUS_CLICKS=t:x:y[:right],...` | Scripted input at t seconds (testing). |
 
 | `ICARUS_SNDTEST=slot:entry,...` | Testing: 20 s in, load and play DROYSND.SNF entries through the game's own loader. |

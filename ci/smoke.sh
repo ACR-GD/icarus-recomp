@@ -4,7 +4,7 @@ set -e
 for f in tools/*.py; do python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$f"; done
 ./build/is3unpack 2>&1 | grep -q usage || true
 set +e
-ICARUS_DATA=no-such-dir "$1" > smoke.log 2>&1
+ICARUS_LAUNCHER=0 ICARUS_DATA=no-such-dir "$1" > smoke.log 2>&1
 code=$?
 set -e
 cat smoke.log

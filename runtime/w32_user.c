@@ -160,7 +160,7 @@ void video_init(void) {
     if (m) scale_mode = !strcmp(m, "nearest") ? SC_NEAREST : !strcmp(m, "smooth") ? SC_SMOOTH : !strcmp(m, "integer") ? SC_INTEGER : SC_SHARP;
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) rt_fatal("SDL video init: %s", SDL_GetError());
     int scale = getenv("ICARUS_SCALE") ? atoi(getenv("ICARUS_SCALE")) : 2;
-    win = SDL_CreateWindow("Icarus: Sanctuary of the Gods", 640 * scale, 480 * scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    win = SDL_CreateWindow("Icarus: Sanctuary of the Gods - Recomp by Second Save", 640 * scale, 480 * scale, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!win) rt_fatal("SDL window: %s", SDL_GetError());
     SDL_SetWindowMinimumSize(win, 640, 480);
     ren = SDL_CreateRenderer(win, 0);

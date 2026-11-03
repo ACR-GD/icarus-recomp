@@ -630,6 +630,11 @@ with open(os.path.join(OUT, 'image.bin'), 'wb') as f:
 with open(os.path.join(OUT, 'image_info.h'), 'w') as f:
     f.write('#define IMAGE_BASE 0x%x\n#define IMAGE_SIZE 0x%x\n' % (pe.base, len(pe.image)))
     f.write('#define TEXT_LO 0x%x\n#define TEXT_HI 0x%x\n' % (CB, CE))
+    # FNV-1a 64 of the original ICARUS.EXE: the launcher's installer checks the user's disc
+    # against it (the recompiled code only matches this exact build of the game)
+    h = 0xcbf29ce484222325
+    for byte in open(sys.argv[1], 'rb').read(): h = ((h ^ byte) * 0x100000001b3) & 0xffffffffffffffff
+    f.write('#define EXE_FNV64 0x%016xull\n#define EXE_SIZE %d\n' % (h, os.path.getsize(sys.argv[1])))
 
 print('functions %d, jump tables %d' % (len(funcs), len(jump_tables)))
 print('instructions covered: %d' % len(seen))
