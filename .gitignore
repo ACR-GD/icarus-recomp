@@ -1,0 +1,14 @@
+# Game content: never publish (copyrighted, rebuilt locally from your own discs)
+Icarus_CD*/
+*.bin
+*.cue
+data/
+gen/
+save/
+# Build outputs
+build/
+icarus
+*.o
+*.ppm
+.DS_Store
+__pycache__/
