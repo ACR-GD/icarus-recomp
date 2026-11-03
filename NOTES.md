@@ -84,6 +84,21 @@
 * Measured on a 75 Hz display: 60 fps host pacing showed 3 of every 4 frames for one refresh and
   the fourth for two (judder). Vsync at the display rate gives a steady 75 fps.
 
+## Movie audio
+* The movie player (timer proc 0x410680 → refill at 0x410aa0) streams OPEN.AVI's 11025 Hz 8-bit
+  stereo audio into a one-second looping buffer. Every 42 ms tick it writes chunk k at offset
+  k*919. It never reads the play cursor.
+* Two flaws make plain ring playback crackle (probably on the original too):
+  1. 42 ms per tick vs 41.7 ms of audio per chunk: the reader overtakes the writer and plays
+     stale data at almost every chunk boundary.
+  2. 919-byte slots hold 459 stereo frames (918 bytes), so every other chunk starts on an odd
+     byte (left/right swapped) and one stale byte remains per slot.
+* `w32_dsound.c` treats a looping buffer that is written while it plays as a stream. Each
+  Unlock's whole frames go into a host FIFO, played with a ~90 ms cushion and a ±3% speed
+  correction. All buffers are now resampled with linear interpolation.
+* Measured with a second-difference click detector over 12 s of the movie: 525/487 click events
+  (L/R) before, 0 after; the soundtrack itself has 0.
+
 ## Debugging tips
 * `ICARUS_TRACE=1 ICARUS_TRACE_QUIET=PeekMessageA,GetLocalTime,GetSystemTime,SetEntries,SetPalette`
   gives a readable API log.

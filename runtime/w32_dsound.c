@@ -17,7 +17,16 @@ struct dsbuf {
     int playing, loop;
     uint32_t obj;
     float gl, gr;
+    // Streaming: a looping buffer the game keeps writing while it plays (the movie player).
+    // Each write's whole frames are queued in a host FIFO, which is played with a ~90 ms cushion
+    // and a slight speed adjustment to follow the writer. (The game's movie player writes 918
+    // bytes of 8-bit stereo into 919-byte slots, so playing the ring directly swaps the channels
+    // and replays a stale byte every 42 ms: audible crackle.)
+    int writes, streaming, primed;
+    uint8_t *fifo; uint32_t fr, fw;  // byte FIFO (FIFO_CAP), read / write counters
+    double ffrac;                    // fractional frame position inside the FIFO
 };
+#define FIFO_CAP (1u << 18)
 #define NB 256
 static struct dsbuf B[NB];
 static SDL_AudioStream *stream;
@@ -81,16 +90,56 @@ static void SDLCALL mix_cb(void *ud, SDL_AudioStream *st, int additional, int to
             uint32_t nfr = b->size / bpf;
             double step = (double)b->rate / OUT_RATE;
             double fpos = b->pos / bpf;
+            if (b->streaming) {
+                double bps = (double)b->rate * bpf, target = bps * 0.09;
+                uint32_t avail = b->fw - b->fr;
+                if (!b->primed && avail >= target) b->primed = 1;
+                if (!b->primed) continue;               // wait for the cushion (silence)
+                double adj = 1 + ((double)avail - target) / target * 0.05;
+                if (adj < 0.97) adj = 0.97; if (adj > 1.03) adj = 1.03;
+                double st = step * adj;
+                for (int i = 0; i < n; i++) {
+                    if (b->fw - b->fr < 2u * (uint32_t)bpf) { b->primed = 0; LOG("snd #%d: underrun, re-buffering\n", k); break; }
+                    uint32_t a1 = b->fr & (FIFO_CAP - 1), a2 = (b->fr + (uint32_t)bpf) & (FIFO_CAP - 1);
+                    float l, r, l2, r2, t = (float)b->ffrac;
+                    if (b->bits == 8) {
+                        l = (b->fifo[a1] - 128) / 128.0f; r = b->ch == 2 ? (b->fifo[(a1 + 1) & (FIFO_CAP - 1)] - 128) / 128.0f : l;
+                        l2 = (b->fifo[a2] - 128) / 128.0f; r2 = b->ch == 2 ? (b->fifo[(a2 + 1) & (FIFO_CAP - 1)] - 128) / 128.0f : l2;
+                    } else {
+                        int16_t v[4];
+                        for (int q = 0; q < 2 * b->ch; q++) v[q] = (int16_t)(b->fifo[(a1 + 2 * q) & (FIFO_CAP - 1)] | b->fifo[(a1 + 2 * q + 1) & (FIFO_CAP - 1)] << 8);
+                        int16_t w2[4];
+                        for (int q = 0; q < 2 * b->ch; q++) w2[q] = (int16_t)(b->fifo[(a2 + 2 * q) & (FIFO_CAP - 1)] | b->fifo[(a2 + 2 * q + 1) & (FIFO_CAP - 1)] << 8);
+                        l = v[0] / 32768.0f; r = b->ch == 2 ? v[1] / 32768.0f : l;
+                        l2 = w2[0] / 32768.0f; r2 = b->ch == 2 ? w2[1] / 32768.0f : l2;
+                    }
+                    l += (l2 - l) * t; r += (r2 - r) * t;
+                    mixbuf[2 * i] += l * b->gl; mixbuf[2 * i + 1] += r * b->gr;
+                    b->ffrac += st;
+                    while (b->ffrac >= 1) { b->ffrac -= 1; b->fr += (uint32_t)bpf; }
+                    fpos += st; if (fpos >= nfr) fpos -= nfr;   // keep the reported play cursor moving
+                }
+                b->pos = fpos * bpf;
+                continue;
+            }
             for (int i = 0; i < n; i++) {
                 uint32_t f = (uint32_t)fpos;
                 if (f >= nfr) {
                     if (b->loop) { fpos -= nfr; f = (uint32_t)fpos; if (f >= nfr) { fpos = 0; f = 0; } }
                     else { b->playing = 0; fpos = 0; break; }
                 }
-                uint32_t a = b->data + f * bpf;
-                float l, r;
-                if (b->bits == 8) { l = (RD8(a) - 128) / 128.0f; r = b->ch == 2 ? (RD8(a + 1) - 128) / 128.0f : l; }
-                else { l = (int16_t)RD16(a) / 32768.0f; r = b->ch == 2 ? (int16_t)RD16(a + 2) / 32768.0f : l; }
+                uint32_t f2 = f + 1 < nfr ? f + 1 : (b->loop ? 0 : f);
+                float t = (float)(fpos - f);
+                uint32_t a = b->data + f * bpf, a2 = b->data + f2 * bpf;
+                float l, r, l2, r2;
+                if (b->bits == 8) {
+                    l = (RD8(a) - 128) / 128.0f; r = b->ch == 2 ? (RD8(a + 1) - 128) / 128.0f : l;
+                    l2 = (RD8(a2) - 128) / 128.0f; r2 = b->ch == 2 ? (RD8(a2 + 1) - 128) / 128.0f : l2;
+                } else {
+                    l = (int16_t)RD16(a) / 32768.0f; r = b->ch == 2 ? (int16_t)RD16(a + 2) / 32768.0f : l;
+                    l2 = (int16_t)RD16(a2) / 32768.0f; r2 = b->ch == 2 ? (int16_t)RD16(a2 + 2) / 32768.0f : l2;
+                }
+                l += (l2 - l) * t; r += (r2 - r) * t;        // linear interpolation
                 mixbuf[2 * i] += l * b->gl; mixbuf[2 * i + 1] += r * b->gr;
                 fpos += step;
             }
@@ -170,6 +219,7 @@ static uint32_t ds_DuplicateSoundBuffer(void) {
     int k; for (k = 1; k < NB && B[k].used; k++) {}
     if (k == NB) return DSERR_GENERIC;
     struct dsbuf *b = &B[k]; *b = *s; b->pos = 0; b->playing = 0;
+    b->fifo = 0; b->fr = b->fw = 0; b->writes = 0; b->streaming = 0; b->primed = 0;
     b->obj = w32_new_object(vt_buf, 8); WR32(b->obj + 4, (uint32_t)k);
     WR32(ARG(2), b->obj);
     return DS_OK;
@@ -180,7 +230,7 @@ static uint32_t ds_GetCaps(void) { memset(GP(ARG(1) + 4), 0, 92); WR32(ARG(1) + 
 static uint32_t b_Release(void) {
     struct dsbuf *b = BF(THIS);
     LOG("snd release #%u\n", RD32(THIS + 4));
-    lock(); b->playing = 0; b->used = 0; unlock();
+    lock(); b->playing = 0; b->used = 0; free(b->fifo); b->fifo = 0; unlock();
     // shared data of duplicated buffers is left to the heap (never freed while another copy uses it)
     return 0;
 }
@@ -217,11 +267,39 @@ static uint32_t b_Lock(void) {
     if (ARG(6)) WR32(ARG(6), n2);
     return DS_OK;
 }
-static uint32_t b_Unlock(void) { return DS_OK; }
+// A write while a looping buffer plays: queue its whole frames in the FIFO. Two such writes mark
+// the buffer as streamed (from then on it plays from the FIFO).
+static void fifo_put(struct dsbuf *b, uint32_t src, uint32_t n) {
+    for (uint32_t k = 0; k < n; k++) b->fifo[(b->fw + k) & (FIFO_CAP - 1)] = RD8(src + k);
+    b->fw += n;
+}
+static uint32_t b_Unlock(void) {
+    struct dsbuf *b = BF(THIS);
+    uint32_t p1 = ARG(1), n1 = ARG(2), p2 = ARG(3), n2 = ARG(4);
+    if (!b->playing || !b->loop || !b->size || p1 < b->data || p1 >= b->data + b->size || !n1) return DS_OK;
+    uint32_t bpf = (uint32_t)(b->ch * b->bits / 8); if (!bpf) return DS_OK;
+    uint32_t whole = (n1 + n2) / bpf * bpf;           // only complete frames
+    lock();
+    if (!b->fifo) b->fifo = malloc(FIFO_CAP);
+    if (b->fw - b->fr + whole <= FIFO_CAP) {
+        uint32_t a = whole < n1 ? whole : n1;
+        fifo_put(b, p1, a);
+        if (whole > a && p2) fifo_put(b, p2, whole - a);
+    }
+    if (++b->writes >= 2 && !b->streaming) { b->streaming = 1; LOG("snd #%u: streaming\n", RD32(THIS + 4)); }
+    unlock();
+    return DS_OK;
+}
 static uint32_t b_Play(void) { struct dsbuf *b = BF(THIS);
-    LOG("snd play #%u size=%u %dHz vol=%d pan=%d loop=%d pos=%u (from %08x)\n", RD32(THIS + 4), b->size, b->rate, b->vol, b->pan, (ARG(3) & 1) != 0, (uint32_t)b->pos, RD32(ESP)); lock(); b->playing = 1; b->loop = (ARG(3) & 1) != 0; unlock(); return DS_OK; }
+    LOG("snd play #%u size=%u %dHz vol=%d pan=%d loop=%d pos=%u (from %08x)\n", RD32(THIS + 4), b->size, b->rate, b->vol, b->pan, (ARG(3) & 1) != 0, (uint32_t)b->pos, RD32(ESP)); lock();
+    if (!b->playing) { b->fr = b->fw = 0; b->ffrac = 0; b->writes = 0; b->streaming = 0; b->primed = 0; }
+    b->playing = 1; b->loop = (ARG(3) & 1) != 0; unlock(); return DS_OK; }
 static uint32_t b_Stop(void) { struct dsbuf *b = BF(THIS); lock(); b->playing = 0; unlock(); return DS_OK; }
-static uint32_t b_SetCurrentPosition(void) { struct dsbuf *b = BF(THIS); lock(); b->pos = ARG(1); unlock(); return DS_OK; }
+static uint32_t b_SetCurrentPosition(void) {
+    struct dsbuf *b = BF(THIS);
+    lock(); b->pos = ARG(1); b->fr = b->fw = 0; b->ffrac = 0; b->writes = 0; b->streaming = 0; b->primed = 0; unlock();
+    return DS_OK;
+}
 static uint32_t b_SetFormat(void) {
     struct dsbuf *b = BF(THIS); uint32_t f = ARG(1);
     lock(); b->ch = RD16(f + 2); b->rate = (int)RD32(f + 4); b->bits = RD16(f + 14); unlock();
