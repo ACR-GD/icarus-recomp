@@ -213,6 +213,21 @@ static void save_screenshot(void) {
     if (sf && SDL_SaveBMP(sf, name)) fprintf(stderr, "screenshot: %s\n", name);
     SDL_DestroySurface(sf);
 }
+// ICARUS_RECORD=file.rgb (trailers / testing): raw 640x480 RGB24 frames at a constant
+// ICARUS_RECORD_FPS (default 30), the latest frame repeated when the game shows nothing new.
+// Pair it with ICARUS_AUDIO_DUMP for the sound (both run on the real-time clock).
+static void record_frame(int w, int h) {
+    static FILE *f; static int init; static uint64_t t0, written; static double fps;
+    static uint8_t rgb[640 * 480 * 3];
+    if (!init) { init = 1; const char *p = getenv("ICARUS_RECORD"); if (p) f = fopen(p, "wb");
+                 fps = getenv("ICARUS_RECORD_FPS") ? atof(getenv("ICARUS_RECORD_FPS")) : 30; t0 = SDL_GetTicksNS(); }
+    if (!f || w != 640 || h != 480) return;
+    uint64_t due = (uint64_t)((SDL_GetTicksNS() - t0) / 1e9 * fps) + 1;
+    if (written >= due) return;
+    for (int k = 0; k < 640 * 480; k++) { uint32_t p = rgba_buf[k]; rgb[3 * k] = (uint8_t)(p >> 16); rgb[3 * k + 1] = (uint8_t)(p >> 8); rgb[3 * k + 2] = (uint8_t)p; }
+    while (written < due) { fwrite(rgb, 1, sizeof rgb, f); written++; }
+    fflush(f);
+}
 // ICARUS_STATS=1: once a second print presents/s, flips/s and the longest gap between presents
 int stats_flips;
 static void stats_tick(void) {
@@ -287,6 +302,7 @@ void video_present(uint32_t pixels, int pitch, int w, int h, int bpp, const uint
     }
     cur_w = w; cur_h = h;
     frame_no++;
+    record_frame(w, h);
     pump_throttled();
     if (screenshot_path && screenshot_every && frame_no % screenshot_every == 0) {
         // a %d in ICARUS_SHOT numbers the files by elapsed tenths of a second

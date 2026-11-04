@@ -114,6 +114,7 @@ Settings live in `icarus.cfg` (created on first run, next to where you start the
 | `ICARUS_TEXT_SPEED=n` | Dialogue speed: 1 original, 2 default, 0 instant. |
 | `ICARUS_HWCURSOR=0` | Draw the cursor in the game frame instead of as the system cursor. |
 | `ICARUS_VSYNC=0` | No vsync; host pacing at 60 fps. |
+| `ICARUS_RECORD=f.rgb` | Record raw 640x480 RGB frames at a constant `ICARUS_RECORD_FPS` (default 30), for trailers (`tools/make_trailer.py`). |
 | `ICARUS_STATS=1` | Print presents/flips per second and the worst frame gap. |
 | `ICARUS_CONFIG=file` | Settings file (default: per-user folder, or `icarus.cfg` in the developer layout). |
 | `ICARUS_LAUNCHER=0` | Do not show the launcher (same as `LAUNCHER = 0` in the settings). |
